@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'">
+  <title>Student Information Management System</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --primary: #1d4ed8;
+      --primary-dark: #1e40af;
+      --secondary: #059669;
+      --danger: #dc2626;
+      --warning: #d97706;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+    }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    nav {
+      background: var(--primary);
+      color: white;
+      padding: 0 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 56px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    nav .brand { font-size: 1.1rem; font-weight: 600; }
+    nav .user-info { display: flex; align-items: center; gap: 1rem; font-size: 0.875rem; }
+    nav .role-badge {
+      background: rgba(255,255,255,0.2);
+      padding: 0.2rem 0.6rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+    }
+    nav button { background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 0.3rem 0.8rem; border-radius: 6px; cursor: pointer; font-size: 0.875rem; }
+    nav button:hover { background: rgba(255,255,255,0.25); }
+    main { max-width: 1100px; margin: 0 auto; padding: 2rem 1rem; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 1.5rem; }
+    h2 { font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem; }
+    label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.375rem; color: var(--text); }
+    input, select { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: 8px; font-size: 0.875rem; outline: none; transition: border-color 0.15s; background: white; }
+    input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(29,78,216,0.1); }
+    .form-group { margin-bottom: 1rem; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .btn { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.55rem 1.25rem; border: none; border-radius: 8px; font-size: 0.875rem; font-weight: 500; cursor: pointer; transition: all 0.15s; text-decoration: none; }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: var(--primary-dark); }
+    .btn-secondary { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { background: var(--border); }
+    .btn-danger { background: var(--danger); color: white; font-size: 0.75rem; padding: 0.3rem 0.7rem; }
+    .btn-sm { font-size: 0.75rem; padding: 0.3rem 0.7rem; }
+    .error { color: var(--danger); font-size: 0.8rem; margin-top: 0.5rem; padding: 0.5rem; background: #fef2f2; border-radius: 6px; border: 1px solid #fecaca; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    th { text-align: left; padding: 0.75rem 1rem; background: var(--bg); border-bottom: 1px solid var(--border); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; color: var(--muted); }
+    td { padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #f8fafc; }
+    .badge { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 9999px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }
+    .badge-green { background: #d1fae5; color: #065f46; }
+    .badge-amber { background: #fef3c7; color: #92400e; }
+    .badge-red { background: #fee2e2; color: #991b1b; }
+    .badge-blue { background: #dbeafe; color: #1e40af; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+    .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem; }
+    .stat-card .value { font-size: 2rem; font-weight: 700; color: var(--primary); }
+    .stat-card .label { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; }
+    .tabs { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; border-bottom: 2px solid var(--border); padding-bottom: 0; }
+    .tab { padding: 0.6rem 1rem; font-size: 0.875rem; font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; color: var(--muted); }
+    .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+    .search-bar { display: flex; gap: 0.75rem; margin-bottom: 1rem; }
+    .search-bar input { max-width: 320px; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+    .detail-row { display: flex; flex-direction: column; gap: 0.2rem; margin-bottom: 0.75rem; }
+    .detail-row .key { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; font-weight: 600; }
+    .detail-row .val { font-size: 0.9rem; }
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 1rem; }
+    .modal { background: white; border-radius: 12px; padding: 1.5rem; width: 100%; max-width: 560px; max-height: 90vh; overflow-y: auto; }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; }
+    .close-btn { background: none; border: none; font-size: 1.25rem; cursor: pointer; color: var(--muted); }
+    .link { color: var(--primary); cursor: pointer; text-decoration: underline; font-size: 0.875rem; }
+    .empty { text-align: center; padding: 3rem; color: var(--muted); }
+    @media (max-width: 640px) { .form-row { grid-template-columns: 1fr; } .detail-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+
+<nav id="navbar" style="display:none">
+  <div class="brand">School MIS</div>
+  <div class="user-info">
+    <span id="nav-username"></span>
+    <span id="nav-role" class="role-badge"></span>
+    <button onclick="logout()">Sign out</button>
+  </div>
+</nav>
+
+<div id="app"></div>
+
+<script>
+'use strict';
+
+let accessToken = null;
+let csrfToken = null;
+let currentUser = null;
+
+// ── API helpers ──────────────────────────────────────────────────────────────
+
+async function apiRequest(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...options.headers };
+  if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+  if (csrfToken && options.method && options.method !== 'GET') headers['X-CSRF-Token'] = csrfToken;
+
+  const res = await fetch(`/api${path}`, { ...options, headers });
+  if (res.status === 401) { logout(); return null; }
+  return res;
+}
+
+async function apiGet(path) {
+  return apiRequest(path);
+}
+
+async function apiPost(path, data) {
+  return apiRequest(path, { method: 'POST', body: JSON.stringify(data) });
+}
+
+async function apiPut(path, data) {
+  return apiRequest(path, { method: 'PUT', body: JSON.stringify(data) });
+}
+
+async function apiDelete(path) {
+  return apiRequest(path, { method: 'DELETE' });
+}
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+async function loginUser(username, password) {
+  const res = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) { const b = await res.json(); throw new Error(b.error || 'Login failed'); }
+  const data = await res.json();
+  accessToken = data.access_token;
+  csrfToken = data.csrf_token;
+  const me = await apiGet('/auth/me');
+  if (!me) return;
+  currentUser = await me.json();
+  document.getElementById('navbar').style.display = 'flex';
+  document.getElementById('nav-username').textContent = currentUser.username;
+  document.getElementById('nav-role').textContent = currentUser.role;
+  navigate('/dashboard');
+}
+
+function logout() {
+  if (accessToken && csrfToken) {
+    apiPost('/auth/logout', {}).catch(() => {});
+  }
+  accessToken = null; csrfToken = null; currentUser = null;
+  document.getElementById('navbar').style.display = 'none';
+  navigate('/login');
+}
+
+// ── SPA Router ────────────────────────────────────────────────────────────────
+
+function navigate(path) {
+  history.pushState({}, '', path);
+  render(path);
+}
+
+window.addEventListener('popstate', () => render(location.pathname));
+
+function render(path) {
+  const app = document.getElementById('app');
+  if (!accessToken && path !== '/register') { renderLogin(app); return; }
+  if (path === '/login' || path === '/') { renderLogin(app); return; }
+  if (path === '/register') { renderRegister(app); return; }
+  if (path === '/dashboard') { renderDashboard(app); return; }
+  if (path.startsWith('/students/')) { renderStudentDetail(app, path.split('/')[2]); return; }
+  renderDashboard(app);
+}
+
+// ── Login page ────────────────────────────────────────────────────────────────
+
+function renderLogin(app) {
+  app.innerHTML = `
+    <main style="display:flex;align-items:center;justify-content:center;min-height:calc(100vh - 0px);padding:2rem">
+      <div style="width:100%;max-width:400px">
+        <div class="card">
+          <h1>Sign in</h1>
+          <p style="color:var(--muted);font-size:0.875rem;margin-bottom:1.5rem">School Management Information System</p>
+          <div id="login-error" class="error" style="display:none"></div>
+          <div class="form-group"><label>Username</label><input id="login-username" type="text" autocomplete="username" placeholder="Enter your username"></div>
+          <div class="form-group"><label>Password</label><input id="login-password" type="password" autocomplete="current-password" placeholder="Enter your password"></div>
+          <button class="btn btn-primary" style="width:100%" onclick="submitLogin()">Sign in</button>
+          <p style="text-align:center;margin-top:1rem;font-size:0.875rem;color:var(--muted)">
+            No account? <span class="link" onclick="navigate('/register')">Register</span>
+          </p>
+        </div>
+        <p style="text-align:center;color:var(--muted);font-size:0.75rem;margin-top:1rem">Demo: admin / Admin@CyberLab1</p>
+      </div>
+    </main>`;
+
+  document.getElementById('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') submitLogin(); });
+}
+
+async function submitLogin() {
+  const u = document.getElementById('login-username').value.trim();
+  const p = document.getElementById('login-password').value;
+  const errEl = document.getElementById('login-error');
+  errEl.style.display = 'none';
+  try { await loginUser(u, p); }
+  catch (e) { errEl.textContent = e.message; errEl.style.display = 'block'; }
+}
+
+// ── Register page ─────────────────────────────────────────────────────────────
+
+function renderRegister(app) {
+  app.innerHTML = `
+    <main style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:2rem">
+      <div style="width:100%;max-width:420px">
+        <div class="card">
+          <h1>Create account</h1>
+          <div id="reg-error" class="error" style="display:none"></div>
+          <div id="reg-success" style="display:none;background:#d1fae5;border:1px solid #6ee7b7;padding:0.75rem;border-radius:8px;margin-bottom:1rem;font-size:0.875rem"></div>
+          <div class="form-group"><label>Username</label><input id="reg-username" type="text"></div>
+          <div class="form-group"><label>Email</label><input id="reg-email" type="email"></div>
+          <div class="form-group"><label>Password <span style="color:var(--muted);font-size:0.75rem">(min 8 chars)</span></label><input id="reg-password" type="password"></div>
+          <div class="form-group"><label>Role</label>
+            <select id="reg-role"><option value="student">Student</option><option value="parent">Parent / Guardian</option></select>
+          </div>
+          <button class="btn btn-primary" style="width:100%" onclick="submitRegister()">Create account</button>
+          <p style="text-align:center;margin-top:1rem;font-size:0.875rem;color:var(--muted)">
+            Already have an account? <span class="link" onclick="navigate('/login')">Sign in</span>
+          </p>
+        </div>
+      </div>
+    </main>`;
+}
+
+async function submitRegister() {
+  const errEl = document.getElementById('reg-error');
+  const okEl = document.getElementById('reg-success');
+  errEl.style.display = 'none'; okEl.style.display = 'none';
+  const body = {
+    username: document.getElementById('reg-username').value.trim(),
+    email: document.getElementById('reg-email').value.trim(),
+    password: document.getElementById('reg-password').value,
+    role: document.getElementById('reg-role').value,
+  };
+  const res = await fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (res.ok) {
+    okEl.textContent = 'Account created. You can now sign in.';
+    okEl.style.display = 'block';
+    setTimeout(() => navigate('/login'), 1500);
+  } else {
+    const d = await res.json();
+    errEl.textContent = d.error || (d.errors && d.errors[0].msg) || 'Registration failed';
+    errEl.style.display = 'block';
+  }
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+
+let allStudents = [];
+let studentFilter = '';
+
+async function renderDashboard(app) {
+  app.innerHTML = `<main><div id="dash-content"><div class="card"><p style="color:var(--muted)">Loading...</p></div></div></main>`;
+
+  const res = await apiGet('/students');
+  if (!res) return;
+  allStudents = await res.json();
+
+  let statsHtml = '';
+  if (currentUser.role === 'admin') {
+    const sr = await apiGet('/admin/stats');
+    if (sr) {
+      const stats = await sr.json();
+      statsHtml = `
+        <div class="stats-grid">
+          <div class="stat-card"><div class="value">${stats.totalStudents}</div><div class="label">Total Students</div></div>
+          <div class="stat-card"><div class="value">${stats.senCount}</div><div class="label">SEN / EHCP</div></div>
+          <div class="stat-card"><div class="value">${stats.fsmCount}</div><div class="label">FSM Eligible</div></div>
+          <div class="stat-card"><div class="value">${stats.totalUsers}</div><div class="label">System Users</div></div>
+        </div>`;
+    }
+  }
+
+  const canCreate = currentUser.role === 'admin';
+
+  document.getElementById('dash-content').innerHTML = `
+    ${statsHtml}
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:gap;gap:0.75rem">
+        <h2>Students ${currentUser.role !== 'admin' ? `(${currentUser.role === 'teacher' ? 'Your form group' : 'Your record'})` : ''}</h2>
+        ${canCreate ? `<button class="btn btn-primary" onclick="showCreateModal()">+ Add Student</button>` : ''}
+      </div>
+      <div class="search-bar">
+        <input type="text" placeholder="Search by name or UPN..." oninput="filterStudents(this.value)">
+      </div>
+      <div id="students-table-wrap">${renderStudentsTable(allStudents)}</div>
+    </div>
+    <div id="student-modal" style="display:none"></div>
+  `;
+}
+
+function renderStudentsTable(students) {
+  if (students.length === 0) return '<div class="empty">No students found.</div>';
+  return `<table>
+    <thead><tr>
+      <th>Name</th><th>UPN</th><th>Year</th><th>Form</th><th>SEN</th><th>FSM</th><th></th>
+    </tr></thead>
+    <tbody>
+    ${students.map(s => `<tr>
+      <td><strong>${s.last_name}, ${s.first_name}</strong></td>
+      <td style="font-family:monospace;font-size:0.8rem">${s.upn}</td>
+      <td>Y${s.year_group}</td>
+      <td>${s.form_group}</td>
+      <td>${senBadge(s.sen_status)}</td>
+      <td>${s.fsm_eligible ? '<span class="badge badge-amber">FSM</span>' : '<span style="color:var(--muted)">—</span>'}</td>
+      <td><button class="btn btn-sm btn-secondary" onclick="navigate('/students/${s.id}')">View</button></td>
+    </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+function senBadge(status) {
+  if (status === 'none') return '<span style="color:var(--muted)">—</span>';
+  if (status === 'support') return '<span class="badge badge-amber">Support</span>';
+  if (status === 'ehcp') return '<span class="badge badge-red">EHCP</span>';
+  return status;
+}
+
+function filterStudents(val) {
+  studentFilter = val.toLowerCase();
+  const filtered = allStudents.filter(s =>
+    s.first_name.toLowerCase().includes(studentFilter) ||
+    s.last_name.toLowerCase().includes(studentFilter) ||
+    s.upn.toLowerCase().includes(studentFilter)
+  );
+  document.getElementById('students-table-wrap').innerHTML = renderStudentsTable(filtered);
+}
+
+// ── Student detail page ────────────────────────────────────────────────────────
+
+async function renderStudentDetail(app, id) {
+  app.innerHTML = `<main><div class="card"><p>Loading...</p></div></main>`;
+  const res = await apiGet(`/students/${id}`);
+  if (!res || !res.ok) { navigate('/dashboard'); return; }
+  const s = await res.json();
+
+  const canEdit = currentUser.role === 'admin' || (currentUser.role === 'teacher');
+
+  app.innerHTML = `<main>
+    <div style="display:flex;gap:1rem;align-items:center;margin-bottom:1.5rem">
+      <button class="btn btn-secondary" onclick="navigate('/dashboard')">← Back</button>
+      <h1 style="margin:0">${s.first_name} ${s.last_name}</h1>
+    </div>
+    <div class="detail-grid">
+      <div class="card">
+        <h2>Student Details</h2>
+        ${field('UPN', s.upn)}
+        ${field('Date of Birth', s.date_of_birth)}
+        ${field('Year Group', `Year ${s.year_group}`)}
+        ${field('Form Group', s.form_group)}
+        ${field('SEN Status', s.sen_status === 'none' ? 'None' : s.sen_status.toUpperCase())}
+        ${field('FSM Eligible', s.fsm_eligible ? 'Yes' : 'No')}
+        ${field('Home Address', s.home_address || '—')}
+        ${s.medical_notes ? field('Medical Notes', s.medical_notes) : ''}
+      </div>
+      <div>
+        <div class="card">
+          <h2>Emergency Contacts</h2>
+          ${s.emergency_contacts.length === 0 ? '<p style="color:var(--muted);font-size:0.875rem">No emergency contacts recorded.</p>' :
+            s.emergency_contacts.map(c => `
+              <div style="padding:0.75rem 0;border-bottom:1px solid var(--border)">
+                <div style="font-weight:600">${c.name} ${c.primary_contact ? '<span class="badge badge-blue">Primary</span>' : ''}</div>
+                <div style="font-size:0.8rem;color:var(--muted);margin-top:0.25rem">${c.relationship} · ${c.phone}${c.email ? ` · ${c.email}` : ''}</div>
+              </div>`).join('')}
+        </div>
+      </div>
+    </div>
+  </main>`;
+}
+
+function field(k, v) {
+  return `<div class="detail-row"><div class="key">${k}</div><div class="val">${v}</div></div>`;
+}
+
+// ── Create student modal ──────────────────────────────────────────────────────
+
+function showCreateModal() {
+  document.getElementById('student-modal').style.display = 'block';
+  document.getElementById('student-modal').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>Add New Student</h2>
+          <button class="close-btn" onclick="closeModal()">×</button>
+        </div>
+        <div id="create-error" class="error" style="display:none"></div>
+        <div class="form-row">
+          <div class="form-group"><label>First Name</label><input id="c-first" type="text"></div>
+          <div class="form-group"><label>Last Name</label><input id="c-last" type="text"></div>
+        </div>
+        <div class="form-group"><label>UPN <span style="color:var(--muted);font-size:0.75rem">(A + 12 digits)</span></label><input id="c-upn" type="text" placeholder="A123456789012"></div>
+        <div class="form-row">
+          <div class="form-group"><label>Date of Birth</label><input id="c-dob" type="date"></div>
+          <div class="form-group"><label>Year Group</label>
+            <select id="c-year">${[7,8,9,10,11,12,13].map(y=>`<option value="${y}">Year ${y}</option>`).join('')}</select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Form Group</label><input id="c-form" type="text" placeholder="e.g. 7A"></div>
+          <div class="form-group"><label>SEN Status</label>
+            <select id="c-sen"><option value="none">None</option><option value="support">SEN Support</option><option value="ehcp">EHCP</option></select>
+          </div>
+        </div>
+        <div class="form-group"><label><input type="checkbox" id="c-fsm" style="width:auto;margin-right:0.5rem">FSM Eligible</label></div>
+        <div class="form-group"><label>Home Address</label><input id="c-address" type="text"></div>
+        <div style="display:flex;gap:0.75rem;justify-content:flex-end;margin-top:1rem">
+          <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="submitCreateStudent()">Add Student</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function closeModal() {
+  document.getElementById('student-modal').style.display = 'none';
+  document.getElementById('student-modal').innerHTML = '';
+}
+
+async function submitCreateStudent() {
+  const errEl = document.getElementById('create-error');
+  errEl.style.display = 'none';
+  const body = {
+    first_name: document.getElementById('c-first').value.trim(),
+    last_name: document.getElementById('c-last').value.trim(),
+    upn: document.getElementById('c-upn').value.trim().toUpperCase(),
+    date_of_birth: document.getElementById('c-dob').value,
+    year_group: parseInt(document.getElementById('c-year').value, 10),
+    form_group: document.getElementById('c-form').value.trim(),
+    sen_status: document.getElementById('c-sen').value,
+    fsm_eligible: document.getElementById('c-fsm').checked,
+    home_address: document.getElementById('c-address').value.trim() || null,
+  };
+  const res = await apiPost('/students', body);
+  if (!res) return;
+  if (res.ok) {
+    closeModal();
+    renderDashboard(document.getElementById('app'));
+  } else {
+    const d = await res.json();
+    errEl.textContent = d.error || (d.errors && d.errors[0].msg) || 'Failed to create student';
+    errEl.style.display = 'block';
+  }
+}
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+render(location.pathname);
+</script>
+</body>
+</html>

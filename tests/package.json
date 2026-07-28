@@ -1,0 +1,7 @@
+{
+  "name": "student-information-management-system-tests",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "node --test test.js"
+  }
+}
