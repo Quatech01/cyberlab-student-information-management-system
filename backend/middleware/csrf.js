@@ -1,14 +1,31 @@
 'use strict';
+const { randomUUID } = require('node:crypto');
 
-function csrfProtect(req, res, next) {
-  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-  if (!req.user) return next();
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const SKIP_PATHS   = new Set(['/auth/login', '/auth/register', '/auth/refresh']);
 
-  const token = req.headers['x-csrf-token'];
-  if (!token || token !== req.user.jti) {
-    return res.status(403).json({ error: 'Invalid or missing CSRF token' });
+function csrfMiddleware(req, res, next) {
+  if (SAFE_METHODS.has(req.method)) return next();
+
+  const relPath = req.path.replace(/^\/api/, '');
+  if (SKIP_PATHS.has(relPath)) return next();
+
+  const cookieHeader = req.headers.cookie || '';
+  const cookieToken = cookieHeader
+    .split(';')
+    .map(c => c.trim().split('='))
+    .find(([k]) => k === 'csrf_token')?.[1];
+
+  const headerToken = req.headers['x-csrf-token'];
+
+  if (!cookieToken || !headerToken || cookieToken !== headerToken) {
+    return res.status(403).json({ error: 'Invalid CSRF token' });
   }
   next();
 }
 
-module.exports = { csrfProtect };
+function generateCsrfToken() {
+  return randomUUID();
+}
+
+module.exports = { csrfMiddleware, generateCsrfToken };

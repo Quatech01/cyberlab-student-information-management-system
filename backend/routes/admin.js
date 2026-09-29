@@ -1,41 +1,29 @@
-'use strict';
-const { Router } = require('express');
-const { getDb } = require('../db/index.js');
-const { authenticate, authorize } = require('../middleware/auth.js');
+﻿'use strict';
+const express = require('express');
+const { getDb }             = require('../db/database');
+const { authenticate, requireRole } = require('../middleware/auth');
 
-const router = Router();
+const router = express.Router();
 
-// GET /api/admin/users — admin only
-router.get('/users', authenticate, authorize('admin'), (req, res) => {
-  const db = getDb();
-  const users = db.prepare(
-    'SELECT id, username, email, role, form_group, created_at FROM users ORDER BY created_at DESC'
-  ).all();
-  res.json(users);
-});
-
-// GET /api/admin/audit — admin only
-router.get('/audit', authenticate, authorize('admin'), (req, res) => {
-  const db = getDb();
+// GET /api/admin/audit-log (admin only)
+router.get('/audit-log', authenticate, requireRole('admin'), (req, res) => {
+  const db    = getDb();
+  const limit  = Math.min(parseInt(req.query.limit)  || 100, 500);
+  const offset = Math.max(parseInt(req.query.offset) || 0,   0);
   const logs = db.prepare(
-    'SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 200'
-  ).all();
+    `SELECT al.*, u.username FROM audit_log al
+     LEFT JOIN users u ON u.id = al.user_id
+     ORDER BY al.timestamp DESC LIMIT ? OFFSET ?`
+  ).all(limit, offset);
   res.json(logs);
 });
 
-// GET /api/admin/stats — admin only
-router.get('/stats', authenticate, authorize('admin'), (req, res) => {
-  const db = getDb();
-  const totalStudents = db.prepare('SELECT COUNT(*) as count FROM students').get().count;
-  const totalUsers = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
-  const senCount = db.prepare("SELECT COUNT(*) as count FROM students WHERE sen_status != 'none'").get().count;
-  const fsmCount = db.prepare('SELECT COUNT(*) as count FROM students WHERE fsm_eligible = 1').get().count;
-
-  const byYearGroup = db.prepare(
-    'SELECT year_group, COUNT(*) as count FROM students GROUP BY year_group ORDER BY year_group'
+// GET /api/admin/users (admin only)
+router.get('/users', authenticate, requireRole('admin'), (req, res) => {
+  const users = getDb().prepare(
+    'SELECT id, username, email, role, created_at FROM users ORDER BY created_at DESC'
   ).all();
-
-  res.json({ totalStudents, totalUsers, senCount, fsmCount, byYearGroup });
+  res.json(users);
 });
 
 module.exports = router;

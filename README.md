@@ -1,92 +1,88 @@
-# Student Information Management System
+﻿# Student Information Management System
 
-A secure full-stack web application for managing student records in a UK educational institution, demonstrating production-grade DevSecOps practices: JWT authentication, RBAC, CSRF protection, parameterised SQL, bcrypt hashing, rate limiting, and security headers.
+A secure full-stack web application for managing student records in a UK educational institution.
 
 ## What This Demonstrates
 
-UK schools store some of the most sensitive data about children: medical conditions, SEN status, safeguarding notes, and free school meal eligibility. This project shows how to build a secure multi-role data management system that enforces strict access boundaries — an admin sees everything, a teacher sees only their form group, a student sees only their own record, and a parent sees only their linked children.
+This project demonstrates defensive implementation of a real-world school management information system (MIS). It covers every layer of a production-grade web application's security posture:
 
-Key security concepts demonstrated:
+- **JWT authentication** with short-lived access tokens (15 minutes) and server-side revocable refresh tokens (7 days), each stored as SHA-256 hashes in SQLite to prevent database leakage
+- **Role-Based Access Control** across four roles (admin, teacher, student, parent) enforced in middleware before any route handler executes — no inline per-route checks
+- **CSRF double-submit cookie protection** — a UUID CSRF token is set as a `SameSite=Strict` cookie on login; every state-changing request must echo it in the `X-CSRF-Token` header
+- **Parameterised queries** via `node:sqlite`'s `DatabaseSync.prepare()` — user input never reaches raw SQL strings
+- **bcrypt password hashing** at cost factor 12 — adaptive and GPU-resistant
+- **Helmet security headers** — CSP, HSTS, X-Frame-Options DENY, X-Content-Type-Options, and others on every response
+- **express-rate-limit** — auth endpoints limited to 20 req/15 min; API endpoints to 100 req/min
+- **Input validation** — every API boundary validated with `express-validator`; UPN format checked with regex; year groups clamped to 7–13; emails validated per RFC
+- **Audit log** — every login, student view, create, update, and delete is recorded with user ID, entity type, entity ID, and client IP
 
-- **JWT with short-lived access tokens and revocable refresh tokens** — 15-minute access tokens limit exposure; refresh tokens stored in the database can be revoked on logout
-- **CSRF protection via JWT jti** — the token's unique ID acts as the CSRF token; any state-changing request must echo it back in the `X-CSRF-Token` header
-- **Role-Based Access Control** — four roles (admin, teacher, student, parent) enforced in middleware, not per-route conditionals
-- **Parameterised queries throughout** — every DB operation uses prepared statements; SQL injection strings are stored safely or rejected
-- **bcrypt password hashing** — cost factor 12 for credential storage
-- **UK-specific student data** — UPN (Unique Pupil Number), SEN status (none/support/EHCP), FSM eligibility, year groups 7–13
-
-## How It Works
+## Architecture
 
 ```
-backend/          Express API (JWT auth, RBAC middleware, SQLite via node:sqlite)
-  routes/         auth.js, students.js, admin.js
-  middleware/     auth.js (JWT verify + role check), csrf.js (jti comparison)
-  db/             schema.sql + lazy DatabaseSync singleton
-frontend/         Self-contained SPA (index.html) — no build step, no CDN
-tests/            28 node:test assertions covering all six test groups
+backend/          Express REST API
+  db/             node:sqlite schema, initialisation, seed data
+  middleware/     JWT auth, CSRF double-submit cookie, RBAC factories
+  routes/         auth, students, admin
+frontend/         Self-contained SPA (no build step, all CSS/JS inline)
+tests/            node:test integration suite (28 tests)
 ```
 
-The backend serves the frontend at `/` and the API at `/api/*`. On first startup, five seed users (admin, two teachers, a parent, a student) and five student records are created automatically.
+The demo server seeds 8 students across year groups 9–12 with four form groups. Three students have user accounts (Emma Wilson / student, James Chen / student, Sofia Rahman / student). Two parents are linked to their children via a join table. Two teachers are assigned form groups.
 
 ## Quick Start
 
 ```bash
-# Install and start the backend
 cd backend && npm install
 node index.js
-# Server starts on http://127.0.0.1:4000
-
-# Open the UI
-# Visit http://127.0.0.1:4000 in your browser
-# Demo login: admin / Admin@CyberLab1
-
-# Run the security tool (tests)
-cd ../tests && npm test
+# Open http://127.0.0.1:3000
 ```
 
-## Example API Output
+Demo credentials:
+
+| Username     | Password       | Role    |
+|--------------|----------------|---------|
+| admin        | Admin@1234     | admin   |
+| ms_johnson   | Teacher@1234   | teacher |
+| emma.wilson  | Student@1234   | student |
+| p.wilson     | Parent@1234    | parent  |
+
+## Running Tests
+
+```bash
+cd tests && npm test
+```
+
+Tests start an isolated in-memory database on a random port, seed all demo data, and exercise all 28 assertions before shutting the server down.
+
+## Example Output
 
 ```json
-GET /api/students  (as admin)
-
+GET /api/students (admin)
 [
-  {
-    "id": 1,
-    "upn": "A123456789001",
-    "first_name": "Alice",
-    "last_name": "Smith",
-    "date_of_birth": "2010-09-01",
-    "year_group": 7,
-    "form_group": "7A",
-    "sen_status": "none",
-    "fsm_eligible": false,
-    "home_address": "1 Maple Avenue, London, SW1A 1AA",
-    "gdpr_consent": true,
-    "created_at": "2024-09-01T08:00:00.000Z"
-  }
+  { "id": 1, "upn": "A123456789012", "first_name": "Emma",  "last_name": "Wilson",
+    "year_group": 9, "form_group": "9A", "sen_status": "None", "fsm_eligibility": 0 },
+  { "id": 2, "upn": "B234567890123", "first_name": "James", "last_name": "Chen",
+    "year_group": 10, "form_group": "10A", "sen_status": "SEN Support", "fsm_eligibility": 0 },
+  ...
 ]
-```
 
-```json
-POST /api/auth/login  →  200 OK
+GET /api/students (teacher ms_johnson — form groups 9A, 10A only)
+[ Emma Wilson (9A), Oliver Martinez (9A), James Chen (10A), Noah Okafor (10A) ]
 
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refresh_token": "a1b2c3d4-e5f6-...",
-  "csrf_token": "f7g8h9i0-j1k2-..."
-}
+GET /api/students (student emma.wilson — own record only)
+[ Emma Wilson (9A) ]
 ```
 
 ## Key Takeaways
 
-1. **Access tokens should be short-lived** — 15 minutes limits the damage window if a token is stolen
-2. **Refresh tokens enable revocation** — storing them server-side means logout actually works (stateless JWTs alone cannot be revoked)
-3. **CSRF protection is necessary even with JWTs** — if tokens are ever moved to cookies, CSRF attacks apply; the jti double-submit pattern works for both scenarios
-4. **Row-level security belongs in the query, not the handler** — the `/api/students` route returns different data for each role because the SQL differs, not because data is filtered after the fact
-5. **UPN format validation is not input sanitisation** — parameterised queries are the sanitisation; format validation is business rule enforcement
+1. **Row-level isolation is not enough** — teachers should see only their form group; parents only their children. Enforce this at the SQL level (`WHERE form_group IN (?)`, `JOIN parent_student`), not just in application logic.
+2. **CSRF tokens must be bound to the session** — the double-submit cookie pattern is correct only when cookies are `SameSite=Strict`; `SameSite=None` without `Secure` makes it pointless.
+3. **SHA-256 hash your refresh tokens before storing** — if the DB is compromised, raw tokens allow immediate impersonation; hashes do not.
+4. **UPN is sensitive** — the Unique Pupil Number identifies a child across all English schools. Validate format server-side and never log it in plaintext error messages.
+5. **Audit logs need IP addresses** — for safeguarding investigations, knowing which IP address accessed a student's medical record is as important as knowing which account.
 
 ## Further Reading
 
-- [OWASP JWT Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html)
+- [OWASP Broken Access Control](https://owasp.org/Top10/A01_2021-Broken_Access_Control/)
 - [OWASP CSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)
-- [UK DfE Data Protection Toolkit for Schools](https://www.gov.uk/government/publications/data-protection-toolkit-for-schools)
+- [DfE — Unique Pupil Number guidance](https://www.gov.uk/government/publications/unique-pupil-numbers)

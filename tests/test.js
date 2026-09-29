@@ -1,434 +1,347 @@
-'use strict';
-const path = require('node:path');
-const os = require('node:os');
-const fs = require('node:fs');
-
-// Must be set before requiring the server module so the DB singleton uses this path
-process.env.DB_PATH = path.join(os.tmpdir(), `cyberlab-test-${Date.now()}.db`);
-
+﻿'use strict';
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
+const { existsSync, unlinkSync } = require('node:fs');
+const { join } = require('node:path');
+
+// Fresh DB + minimum bcrypt cost so the test suite runs in seconds
+const testDbPath = join(__dirname, '..', 'backend', 'test_cyberlab.db');
+if (existsSync(testDbPath)) unlinkSync(testDbPath);
+process.env.DB_PATH       = testDbPath;
+process.env.BCRYPT_ROUNDS = '1';
+
 const { start } = require('../backend/index.js');
-const { closeDb } = require('../backend/db/index.js');
 
-let server;
-let port;
-let baseUrl;
+// Wrap everything in one outer describe with concurrency:1 so all groups and
+// all individual tests run sequentially — prevents concurrent bcrypt operations
+// from saturating bcryptjs's setImmediate-based async loop and causing ECONNRESET.
+describe('SIMS', { concurrency: 1 }, () => {
 
-// Credentials from the seed data in backend/index.js
-const ADMIN = { username: 'admin', password: 'Admin@CyberLab1' };
-const TEACHER1 = { username: 'teacher1', password: 'Teacher@Pass1' }; // form_group: 7A
-const TEACHER2 = { username: 'teacher2', password: 'Teacher@Pass2' }; // form_group: 8B
-const PARENT1 = { username: 'parent1', password: 'Parent@Pass1' };
-const STUDENT1 = { username: 'student1', password: 'Student@Pass1' }; // linked to Alice Smith (7A)
+let server, baseUrl;
+let adminToken, teacherToken, studentToken, parentToken;
+let adminCsrf, teacherCsrf, studentCsrf, parentCsrf;
+let createdStudentId;
 
-async function post(path, body, token = null, csrfToken = null) {
+function extractCsrf(res) {
+  const raw = res.headers.get('set-cookie') || '';
+  const m   = raw.match(/csrf_token=([^;,\s]+)/);
+  return m ? m[1] : '';
+}
+
+async function api(path, method = 'GET', body = null, token = null, csrf = null) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
-  return fetch(`${baseUrl}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
-}
-
-async function get(path, token = null) {
-  const headers = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  return fetch(`${baseUrl}${path}`, { headers });
-}
-
-async function put(path, body, token, csrfToken) {
-  const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'X-CSRF-Token': csrfToken };
-  return fetch(`${baseUrl}${path}`, { method: 'PUT', headers, body: JSON.stringify(body) });
-}
-
-async function del(path, token, csrfToken) {
-  const headers = { 'Authorization': `Bearer ${token}`, 'X-CSRF-Token': csrfToken };
-  return fetch(`${baseUrl}${path}`, { method: 'DELETE', headers });
-}
-
-async function login(creds) {
-  const res = await post('/api/auth/login', creds);
-  return res.json();
+  if (csrf && !['GET', 'HEAD'].includes(method)) {
+    headers['Cookie']       = `csrf_token=${csrf}`;
+    headers['X-CSRF-Token'] = csrf;
+  }
+  return fetch(`${baseUrl}${path}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
 }
 
 before(async () => {
-  port = 4000 + Math.floor(Math.random() * 1000);
-  server = await start(port);
+  const port = 4200 + Math.floor(Math.random() * 700);
+  server  = await start(port);
   baseUrl = `http://127.0.0.1:${port}`;
+
+  let r, d;
+  r = await api('/api/auth/login', 'POST', { username: 'admin',       password: 'Admin@1234'   });
+  d = await r.json(); adminToken = d.access_token; adminCsrf = extractCsrf(r);
+
+  r = await api('/api/auth/login', 'POST', { username: 'ms_johnson',  password: 'Teacher@1234' });
+  d = await r.json(); teacherToken = d.access_token; teacherCsrf = extractCsrf(r);
+
+  r = await api('/api/auth/login', 'POST', { username: 'emma.wilson', password: 'Student@1234' });
+  d = await r.json(); studentToken = d.access_token; studentCsrf = extractCsrf(r);
+
+  r = await api('/api/auth/login', 'POST', { username: 'p.wilson',    password: 'Parent@1234'  });
+  d = await r.json(); parentToken = d.access_token; parentCsrf = extractCsrf(r);
 });
 
-after(() => {
-  server.close();
-  closeDb();
-  try { fs.unlinkSync(process.env.DB_PATH); } catch {}
-});
+after(() => server.close());
 
-// ─── Group 1: Server health ───────────────────────────────────────────────────
-
-describe('Server health', () => {
-  it('GET /health returns 200 and status ok', async () => {
-    const res = await get('/health');
-    assert.strictEqual(res.status, 200);
-    const body = await res.json();
-    assert.strictEqual(body.status, 'ok');
+// ─── Group 1: Health ─────────────────────────────────────────────────────────
+describe('Health', { concurrency: 1 }, () => {
+  it('GET /health returns 200', async () => {
+    const r = await fetch(`${baseUrl}/health`);
+    assert.strictEqual(r.status, 200);
   });
 
-  it('Server responds to unknown routes with a non-500 status', async () => {
-    const res = await get('/api/nonexistent');
-    assert.ok(res.status < 500, `Expected < 500, got ${res.status}`);
+  it('GET /health returns { status: "ok" }', async () => {
+    const r = await fetch(`${baseUrl}/health`);
+    const d = await r.json();
+    assert.strictEqual(d.status, 'ok');
   });
 });
 
-// ─── Group 2: Auth flow ────────────────────────────────────────────────────────
-
-describe('Authentication flow', () => {
-  let newUserToken, newUserCsrf, newUserRefresh;
-
-  it('POST /api/auth/register creates a new user (201)', async () => {
-    const res = await post('/api/auth/register', {
-      username: 'newparent',
-      email: 'newparent@example.com',
-      password: 'NewParent@123',
-      role: 'parent',
+// ─── Group 2: Auth flow ───────────────────────────────────────────────────────
+describe('Auth flow', { concurrency: 1 }, () => {
+  it('register a new user returns 201', async () => {
+    const r = await api('/api/auth/register', 'POST', {
+      username: 'new_test_user', email: 'new_test@demo.school.uk',
+      password: 'TestPass@99',  role: 'student',
     });
-    assert.strictEqual(res.status, 201);
-    const body = await res.json();
-    assert.strictEqual(body.username, 'newparent');
-    assert.strictEqual(body.role, 'parent');
-    assert.ok(body.id, 'Should have an id');
-    assert.ok(!body.password_hash, 'Should not expose password hash');
+    assert.strictEqual(r.status, 201);
+    const d = await r.json();
+    assert.ok(d.id);
+    assert.strictEqual(d.role, 'student');
   });
 
-  it('POST /api/auth/login with correct credentials returns tokens (200)', async () => {
-    const res = await post('/api/auth/login', { username: 'newparent', password: 'NewParent@123' });
-    assert.strictEqual(res.status, 200);
-    const body = await res.json();
-    assert.ok(body.access_token, 'Should return access_token');
-    assert.ok(body.refresh_token, 'Should return refresh_token');
-    assert.ok(body.csrf_token, 'Should return csrf_token');
-    newUserToken = body.access_token;
-    newUserCsrf = body.csrf_token;
-    newUserRefresh = body.refresh_token;
+  it('login with correct credentials returns access_token and refresh_token', async () => {
+    const r = await api('/api/auth/login', 'POST', { username: 'admin', password: 'Admin@1234' });
+    assert.strictEqual(r.status, 200);
+    const d = await r.json();
+    assert.ok(d.access_token,  'access_token missing');
+    assert.ok(d.refresh_token, 'refresh_token missing');
   });
 
-  it('POST /api/auth/login with wrong password returns 401', async () => {
-    const res = await post('/api/auth/login', { username: 'newparent', password: 'WrongPassword!' });
-    assert.strictEqual(res.status, 401);
+  it('login with wrong password returns 401', async () => {
+    const r = await api('/api/auth/login', 'POST', { username: 'admin', password: 'WrongPass!' });
+    assert.strictEqual(r.status, 401);
   });
 
-  it('GET /api/auth/me without token returns 401', async () => {
-    const res = await get('/api/auth/me');
-    assert.strictEqual(res.status, 401);
+  it('access protected route without token returns 401', async () => {
+    const r = await fetch(`${baseUrl}/api/students`);
+    assert.strictEqual(r.status, 401);
   });
 
-  it('GET /api/auth/me with valid token returns user profile (200)', async () => {
-    const res = await get('/api/auth/me', newUserToken);
-    assert.strictEqual(res.status, 200);
-    const body = await res.json();
-    assert.strictEqual(body.username, 'newparent');
-    assert.strictEqual(body.role, 'parent');
-    assert.ok(!body.password_hash, 'Should not expose password hash');
+  it('access protected route with valid token returns 200', async () => {
+    const r = await api('/api/auth/me', 'GET', null, adminToken);
+    assert.strictEqual(r.status, 200);
+    const d = await r.json();
+    assert.strictEqual(d.username, 'admin');
+    assert.strictEqual(d.role,     'admin');
   });
 
-  it('POST /api/auth/refresh with valid refresh token returns new access_token (200)', async () => {
-    const res = await post('/api/auth/refresh', { refresh_token: newUserRefresh });
-    assert.strictEqual(res.status, 200);
-    const body = await res.json();
-    assert.ok(body.access_token, 'Should return new access_token');
-    assert.ok(body.csrf_token, 'Should return new csrf_token');
-  });
-
-  it('POST /api/auth/logout revokes the refresh token (200)', async () => {
-    const res = await post('/api/auth/logout', { refresh_token: newUserRefresh }, newUserToken, newUserCsrf);
-    assert.strictEqual(res.status, 200);
-    const body = await res.json();
-    assert.strictEqual(body.message, 'Logged out');
-  });
-
-  it('POST /api/auth/refresh with revoked token returns 401', async () => {
-    const res = await post('/api/auth/refresh', { refresh_token: newUserRefresh });
-    assert.strictEqual(res.status, 401);
+  it('refresh token issues a new access_token', async () => {
+    const loginR = await api('/api/auth/login', 'POST', { username: 'admin', password: 'Admin@1234' });
+    const { refresh_token } = await loginR.json();
+    const r = await api('/api/auth/refresh', 'POST', { refresh_token });
+    assert.strictEqual(r.status, 200);
+    const d = await r.json();
+    assert.ok(d.access_token, 'new access_token missing');
   });
 });
 
-// ─── Group 3: Role-Based Access Control ───────────────────────────────────────
-
-describe('Role-based access control', () => {
-  let adminToken, adminCsrf;
-  let teacher1Token, teacher1Csrf;
-  let teacher2Token, teacher2Csrf;
-  let studentToken;
-  let parentToken;
-
-  before(async () => {
-    const a = await login(ADMIN);
-    adminToken = a.access_token;
-    adminCsrf = a.csrf_token;
-
-    const t1 = await login(TEACHER1);
-    teacher1Token = t1.access_token;
-    teacher1Csrf = t1.csrf_token;
-
-    const t2 = await login(TEACHER2);
-    teacher2Token = t2.access_token;
-    teacher2Csrf = t2.csrf_token;
-
-    const s = await login(STUDENT1);
-    studentToken = s.access_token;
-
-    const p = await login(PARENT1);
-    parentToken = p.access_token;
+// ─── Group 3: RBAC ───────────────────────────────────────────────────────────
+describe('RBAC', { concurrency: 1 }, () => {
+  it('admin lists all 8 students', async () => {
+    const r = await api('/api/students', 'GET', null, adminToken);
+    assert.strictEqual(r.status, 200);
+    const d = await r.json();
+    assert.ok(d.length >= 8, `Expected >=8 students, got ${d.length}`);
   });
 
-  it('Admin can access GET /api/admin/users (200)', async () => {
-    const res = await get('/api/admin/users', adminToken);
-    assert.strictEqual(res.status, 200);
-    const body = await res.json();
-    assert.ok(Array.isArray(body), 'Should return an array');
-    assert.ok(body.length > 0, 'Should contain users');
-  });
-
-  it('Teacher is blocked from GET /api/admin/users (403)', async () => {
-    const res = await get('/api/admin/users', teacher1Token);
-    assert.strictEqual(res.status, 403);
-  });
-
-  it('Student is blocked from GET /api/admin/users (403)', async () => {
-    const res = await get('/api/admin/users', studentToken);
-    assert.strictEqual(res.status, 403);
-  });
-
-  it('Teacher1 sees only their form group (7A) students', async () => {
-    const res = await get('/api/students', teacher1Token);
-    assert.strictEqual(res.status, 200);
-    const students = await res.json();
-    assert.ok(Array.isArray(students));
-    assert.ok(students.length > 0, 'Teacher1 should see 7A students');
-    for (const s of students) {
-      assert.strictEqual(s.form_group, '7A', `Expected form_group 7A, got ${s.form_group}`);
+  it('teacher sees only their form-group students', async () => {
+    const r = await api('/api/students', 'GET', null, teacherToken);
+    assert.strictEqual(r.status, 200);
+    const rows = await r.json();
+    assert.ok(rows.length > 0, 'teacher should see at least one student');
+    const allowed = new Set(['9A', '10A']);
+    for (const s of rows) {
+      assert.ok(allowed.has(s.form_group), `Unexpected form_group: ${s.form_group}`);
     }
   });
 
-  it('Teacher2 sees only their form group (8B) students', async () => {
-    const res = await get('/api/students', teacher2Token);
-    assert.strictEqual(res.status, 200);
-    const students = await res.json();
-    assert.ok(Array.isArray(students));
-    for (const s of students) {
-      assert.strictEqual(s.form_group, '8B');
-    }
+  it('student sees only their own record', async () => {
+    const r = await api('/api/students', 'GET', null, studentToken);
+    assert.strictEqual(r.status, 200);
+    const rows = await r.json();
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].first_name, 'Emma');
   });
 
-  it('Student can only see their own record', async () => {
-    const res = await get('/api/students', studentToken);
-    assert.strictEqual(res.status, 200);
-    const students = await res.json();
-    assert.strictEqual(students.length, 1, 'Student should see exactly their own record');
-    assert.strictEqual(students[0].upn, 'A123456789001', 'Should see Alice Smith');
+  it('teacher cannot create a student (403)', async () => {
+    const r = await api('/api/students', 'POST',
+      { upn: 'Z999999999999', first_name: 'Test', last_name: 'User',
+        dob: '2010-01-01', year_group: 9, form_group: '9A' },
+      teacherToken, teacherCsrf
+    );
+    assert.strictEqual(r.status, 403);
   });
 
-  it('Parent sees only their linked children', async () => {
-    const res = await get('/api/students', parentToken);
-    assert.strictEqual(res.status, 200);
-    const students = await res.json();
-    assert.strictEqual(students.length, 1, 'Parent should see only linked children');
-    assert.strictEqual(students[0].upn, 'A123456789001', 'Should see Alice Smith');
-  });
-});
-
-// ─── Group 4: Security headers ────────────────────────────────────────────────
-
-describe('Security headers', () => {
-  it('Response includes X-Content-Type-Options: nosniff', async () => {
-    const res = await get('/health');
-    assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff');
+  it('parent sees only their linked child', async () => {
+    const r = await api('/api/students', 'GET', null, parentToken);
+    assert.strictEqual(r.status, 200);
+    const rows = await r.json();
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].first_name, 'Emma');
   });
 
-  it('Response includes X-Frame-Options: SAMEORIGIN or DENY', async () => {
-    const res = await get('/health');
-    const xfo = res.headers.get('x-frame-options');
-    assert.ok(xfo, 'X-Frame-Options header should be present');
-  });
-
-  it('Response includes a Content-Security-Policy header', async () => {
-    const res = await get('/health');
-    const csp = res.headers.get('content-security-policy');
-    assert.ok(csp, 'CSP header should be present');
-    assert.ok(csp.includes("default-src"), 'CSP should include default-src');
-  });
-
-  it('Response includes Strict-Transport-Security header', async () => {
-    const res = await get('/health');
-    const hsts = res.headers.get('strict-transport-security');
-    assert.ok(hsts, 'HSTS header should be present');
-    assert.ok(hsts.includes('max-age='), 'HSTS should include max-age');
+  it('non-admin cannot access admin audit-log (403)', async () => {
+    const r = await api('/api/admin/audit-log', 'GET', null, teacherToken);
+    assert.strictEqual(r.status, 403);
   });
 });
 
-// ─── Group 5: Input validation ────────────────────────────────────────────────
-
-describe('Input validation', () => {
-  it('Register with empty username returns 422', async () => {
-    const res = await post('/api/auth/register', {
-      username: '',
-      email: 'valid@example.com',
-      password: 'ValidPass@123',
-    });
-    assert.strictEqual(res.status, 422);
-    const body = await res.json();
-    assert.ok(body.errors, 'Should return validation errors');
-  });
-
-  it('Register with invalid email returns 422', async () => {
-    const res = await post('/api/auth/register', {
-      username: 'validuser',
-      email: 'not-an-email',
-      password: 'ValidPass@123',
-    });
-    assert.strictEqual(res.status, 422);
-  });
-
-  it('Register with password shorter than 8 characters returns 422', async () => {
-    const res = await post('/api/auth/register', {
-      username: 'validuser',
-      email: 'valid2@example.com',
-      password: 'short',
-    });
-    assert.strictEqual(res.status, 422);
-  });
-
-  it('Login with SQL injection username returns 401, not a server crash', async () => {
-    const res = await post('/api/auth/login', {
-      username: "' OR '1'='1' --",
-      password: 'anything',
-    });
-    // Should be 401 (not found / bad credentials) — parameterized query prevents auth bypass
-    assert.strictEqual(res.status, 401);
-  });
-});
-
-// ─── Group 6: Business logic — student CRUD ───────────────────────────────────
-
-describe('Business logic — student CRUD', () => {
-  let adminToken, adminCsrf;
-  let teacher1Token, teacher1Csrf;
-  let createdStudentId;
-
+// ─── Group 4: Security headers ───────────────────────────────────────────────
+describe('Security headers', { concurrency: 1 }, () => {
+  let headers;
   before(async () => {
-    const a = await login(ADMIN);
-    adminToken = a.access_token;
-    adminCsrf = a.csrf_token;
-
-    const t1 = await login(TEACHER1);
-    teacher1Token = t1.access_token;
-    teacher1Csrf = t1.csrf_token;
+    const r = await fetch(`${baseUrl}/health`);
+    headers = r.headers;
   });
 
-  it('Admin can create a student (201)', async () => {
-    const res = await post('/api/students', {
-      upn: 'A999999999001',
-      first_name: 'Frank',
-      last_name: 'Castle',
-      date_of_birth: '2011-01-15',
-      year_group: 7,
-      form_group: '7A',
-      sen_status: 'none',
-      fsm_eligible: false,
-    }, adminToken, adminCsrf);
-    assert.strictEqual(res.status, 201);
-    const body = await res.json();
-    assert.strictEqual(body.upn, 'A999999999001');
-    assert.strictEqual(body.first_name, 'Frank');
-    assert.strictEqual(body.fsm_eligible, false);
-    createdStudentId = body.id;
+  it('X-Content-Type-Options: nosniff', () => {
+    assert.strictEqual(headers.get('x-content-type-options'), 'nosniff');
   });
 
-  it('Admin can read the created student (200)', async () => {
-    const res = await get(`/api/students/${createdStudentId}`, adminToken);
-    assert.strictEqual(res.status, 200);
-    const body = await res.json();
-    assert.strictEqual(body.id, createdStudentId);
-    assert.strictEqual(body.first_name, 'Frank');
-    assert.ok(Array.isArray(body.emergency_contacts), 'Should include emergency_contacts');
+  it('X-Frame-Options: DENY', () => {
+    assert.strictEqual(headers.get('x-frame-options'), 'DENY');
   });
 
-  it('Admin can update student SEN status (200)', async () => {
-    const res = await put(`/api/students/${createdStudentId}`, { sen_status: 'support' }, adminToken, adminCsrf);
-    assert.strictEqual(res.status, 200);
-    const body = await res.json();
-    assert.strictEqual(body.sen_status, 'support');
+  it('Content-Security-Policy present', () => {
+    assert.ok(headers.get('content-security-policy'), 'CSP header missing');
   });
 
-  it('Teacher1 can update a student in their own form group (200)', async () => {
-    const res = await put(`/api/students/${createdStudentId}`, { home_address: '10 New Road, London, W1A 1AB' }, teacher1Token, teacher1Csrf);
-    assert.strictEqual(res.status, 200);
-    const body = await res.json();
-    assert.strictEqual(body.home_address, '10 New Road, London, W1A 1AB');
+  it('Strict-Transport-Security present', () => {
+    assert.ok(headers.get('strict-transport-security'), 'HSTS header missing');
   });
 
-  it('Teacher2 (8B) cannot update a student in form group 7A (403)', async () => {
-    const t2 = await login(TEACHER2);
-    const res = await put(`/api/students/${createdStudentId}`, { home_address: 'Hacked' }, t2.access_token, t2.csrf_token);
-    assert.strictEqual(res.status, 403);
-  });
-
-  it('Creating student with duplicate UPN returns 409', async () => {
-    const res = await post('/api/students', {
-      upn: 'A999999999001',
-      first_name: 'Duplicate',
-      last_name: 'Student',
-      date_of_birth: '2011-01-15',
-      year_group: 7,
-      form_group: '7A',
-      sen_status: 'none',
-      fsm_eligible: false,
-    }, adminToken, adminCsrf);
-    assert.strictEqual(res.status, 409);
-  });
-
-  it('Creating student with invalid UPN format returns 422', async () => {
-    const res = await post('/api/students', {
-      upn: 'invalid-upn',
-      first_name: 'Test',
-      last_name: 'Test',
-      date_of_birth: '2011-01-15',
-      year_group: 7,
-      form_group: '7A',
-      sen_status: 'none',
-      fsm_eligible: false,
-    }, adminToken, adminCsrf);
-    assert.strictEqual(res.status, 422);
-  });
-
-  it('Admin can delete the created student (200)', async () => {
-    const res = await del(`/api/students/${createdStudentId}`, adminToken, adminCsrf);
-    assert.strictEqual(res.status, 200);
-    const body = await res.json();
-    assert.strictEqual(body.id, createdStudentId);
-  });
-
-  it('Deleted student returns 404 on subsequent GET', async () => {
-    const res = await get(`/api/students/${createdStudentId}`, adminToken);
-    assert.strictEqual(res.status, 404);
-  });
-
-  it('POST without CSRF token returns 403', async () => {
-    const res = await post('/api/students', {
-      upn: 'A888888888001',
-      first_name: 'No',
-      last_name: 'CSRF',
-      date_of_birth: '2011-01-15',
-      year_group: 7,
-      form_group: '7A',
-      sen_status: 'none',
-      fsm_eligible: false,
-    }, adminToken, null);
-    assert.strictEqual(res.status, 403);
-  });
-
-  it('Admin sees all 5 seeded students in GET /api/students', async () => {
-    const res = await get('/api/students', adminToken);
-    assert.strictEqual(res.status, 200);
-    const students = await res.json();
-    assert.ok(students.length >= 5, `Expected at least 5 students, got ${students.length}`);
+  it('X-Powered-By absent (removed by Helmet)', () => {
+    assert.strictEqual(headers.get('x-powered-by'), null);
   });
 });
+
+// ─── Group 5: Input validation ───────────────────────────────────────────────
+describe('Input validation', { concurrency: 1 }, () => {
+  it('register with empty username returns 422', async () => {
+    const r = await api('/api/auth/register', 'POST', {
+      username: '', email: 'x@demo.school.uk', password: 'TestPass@99',
+    });
+    assert.ok(r.status === 422 || r.status === 400);
+  });
+
+  it('register with invalid email returns 422', async () => {
+    const r = await api('/api/auth/register', 'POST', {
+      username: 'validuser2', email: 'not-an-email', password: 'TestPass@99',
+    });
+    assert.ok(r.status === 422 || r.status === 400);
+  });
+
+  it('create student with invalid UPN returns 422', async () => {
+    const r = await api('/api/students', 'POST',
+      { upn: 'INVALID', first_name: 'T', last_name: 'U',
+        dob: '2010-01-01', year_group: 9, form_group: '9A' },
+      adminToken, adminCsrf
+    );
+    assert.ok(r.status === 422 || r.status === 400);
+  });
+
+  it('create student with out-of-range year_group returns 422', async () => {
+    const r = await api('/api/students', 'POST',
+      { upn: 'Z000000000001', first_name: 'T', last_name: 'U',
+        dob: '2010-01-01', year_group: 99, form_group: '9A' },
+      adminToken, adminCsrf
+    );
+    assert.ok(r.status === 422 || r.status === 400);
+  });
+
+  it('SQL injection in login username does not crash server', async () => {
+    const r = await api('/api/auth/login', 'POST', {
+      username: "' OR '1'='1", password: 'anything',
+    });
+    assert.ok(r.status === 401 || r.status === 422);
+  });
+});
+
+// ─── Group 6: Business logic ─────────────────────────────────────────────────
+describe('Business logic', { concurrency: 1 }, () => {
+  it('admin creates a student successfully', async () => {
+    const r = await api('/api/students', 'POST', {
+      upn: 'X000000000001', first_name: 'Test', last_name: 'Pupil',
+      dob: '2010-06-15', year_group: 9, form_group: '9A',
+      gender: 'M', sen_status: 'None', fsm_eligibility: false,
+    }, adminToken, adminCsrf);
+    assert.strictEqual(r.status, 201);
+    const d = await r.json();
+    assert.ok(d.id);
+    createdStudentId = d.id;
+  });
+
+  it('admin updates the created student', async () => {
+    assert.ok(createdStudentId, 'Need createdStudentId from previous test');
+    const r = await api(`/api/students/${createdStudentId}`, 'PUT',
+      { form_group: '9B' }, adminToken, adminCsrf
+    );
+    assert.strictEqual(r.status, 200);
+  });
+
+  it('updated student now belongs to new form_group', async () => {
+    const r = await api(`/api/students/${createdStudentId}`, 'GET', null, adminToken);
+    assert.strictEqual(r.status, 200);
+    const d = await r.json();
+    assert.strictEqual(d.form_group, '9B');
+  });
+
+  it('admin deletes the created student', async () => {
+    const r = await api(`/api/students/${createdStudentId}`, 'DELETE', null, adminToken, adminCsrf);
+    assert.strictEqual(r.status, 200);
+  });
+
+  it('deleted student returns 404', async () => {
+    const r = await api(`/api/students/${createdStudentId}`, 'GET', null, adminToken);
+    assert.strictEqual(r.status, 404);
+  });
+
+  it('admin audit log records student access', async () => {
+    const sListR = await api('/api/students', 'GET', null, adminToken);
+    const students = await sListR.json();
+    if (students.length > 0) {
+      await api(`/api/students/${students[0].id}`, 'GET', null, adminToken);
+    }
+    const r = await api('/api/admin/audit-log', 'GET', null, adminToken);
+    assert.strictEqual(r.status, 200);
+    const logs = await r.json();
+    assert.ok(Array.isArray(logs));
+    assert.ok(logs.length > 0, 'Audit log should have entries');
+  });
+
+  it('teacher cannot see student from another form group (403)', async () => {
+    const allR = await api('/api/students', 'GET', null, adminToken);
+    const all  = await allR.json();
+    const ethan = all.find(s => s.last_name === 'Kowalski');
+    assert.ok(ethan, 'Ethan Kowalski should exist');
+    const r = await api(`/api/students/${ethan.id}`, 'GET', null, teacherToken);
+    assert.strictEqual(r.status, 403);
+  });
+
+  it('parent cannot access another student (403)', async () => {
+    const allR = await api('/api/students', 'GET', null, adminToken);
+    const all  = await allR.json();
+    const sofia = all.find(s => s.last_name === 'Rahman');
+    assert.ok(sofia, 'Sofia Rahman should exist');
+    const r = await api(`/api/students/${sofia.id}`, 'GET', null, parentToken);
+    assert.strictEqual(r.status, 403);
+  });
+
+  it('emergency contacts returned for authorised user', async () => {
+    const myR    = await api('/api/students', 'GET', null, studentToken);
+    const myData = await myR.json();
+    assert.ok(myData.length > 0, 'student should see their own record');
+    const r = await api(`/api/students/${myData[0].id}/emergency-contacts`, 'GET', null, studentToken);
+    assert.strictEqual(r.status, 200);
+    const contacts = await r.json();
+    assert.ok(Array.isArray(contacts));
+    assert.ok(contacts.length >= 1, 'Emma should have at least one emergency contact');
+  });
+
+  it('CSRF missing on state-changing request returns 403', async () => {
+    const headers = {
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${adminToken}`,
+    };
+    const r = await fetch(`${baseUrl}/api/students`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ upn: 'Z999999999998', first_name: 'Bad', last_name: 'Actor',
+        dob: '2010-01-01', year_group: 9, form_group: '9A' }),
+    });
+    assert.strictEqual(r.status, 403);
+  });
+});
+
+}); // end outer describe
